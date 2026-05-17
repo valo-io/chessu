@@ -69,6 +69,11 @@ export default function GamePage({ initialLobby }: { initialLobby: Game }) {
   const chatListRef = useRef<HTMLUListElement>(null);
   const moveListRef = useRef<HTMLDivElement>(null);
 
+  const [whiteTime, setWhiteTime] = useState<number | undefined>(initialLobby.whiteTime);
+  const [blackTime, setBlackTime] = useState<number | undefined>(initialLobby.blackTime);
+  const localTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const activeTurnRef = useRef<"w" | "b">(lobby.actualGame.turn());
+
   const [abandonSeconds, setAbandonSeconds] = useState(60);
   useEffect(() => {
     if (
@@ -120,6 +125,10 @@ export default function GamePage({ initialLobby }: { initialLobby: Game }) {
       setNavFen,
       setNavIndex
     });
+    socket.on("timerUpdate", ({ whiteTime: newWhite, blackTime: newBlack }: { whiteTime: number; blackTime: number }) => {
+      setWhiteTime(newWhite);
+      setBlackTime(newBlack);
+    });
 
     return () => {
       window.removeEventListener("resize", handleResize);
@@ -148,6 +157,13 @@ export default function GamePage({ initialLobby }: { initialLobby: Game }) {
     updateTurnTitle();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lobby]);
+
+  useEffect(() => {
+    startLocalTimer();
+    return () => {
+        if (localTimerRef.current) clearInterval(localTimerRef.current);
+    };
+  }, [lobby.pgn, lobby.endReason, lobby.winner]);
 
   function updateTurnTitle() {
     if (lobby.side === "s" || !lobby.white?.id || !lobby.black?.id) return;
@@ -360,6 +376,45 @@ export default function GamePage({ initialLobby }: { initialLobby: Game }) {
     socket.emit("joinAsPlayer");
   }
 
+  const formatTime = (ms: number | undefined) => {
+    if (ms === undefined || ms <= 0) return "0:00";
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  const startLocalTimer = () => {
+    if (localTimerRef.current) clearInterval(localTimerRef.current);
+    if (!lobby.pgn || lobby.pgn === "" || lobby.endReason || lobby.winner) return;
+
+    const chess = new Chess();
+    try {
+      chess.loadPgn(lobby.pgn);
+    } catch {
+      return;
+    }
+    if (chess.isGameOver()) return;
+
+    const currentTurn = chess.turn();
+    activeTurnRef.current = currentTurn;
+
+    localTimerRef.current = setInterval(() => {
+      setWhiteTime(prev => {
+        if (activeTurnRef.current === 'w' && prev !== undefined && prev > 0 && !lobby.endReason && !lobby.winner) {
+          return Math.max(0, prev - 1000);
+        }
+        return prev;
+      });
+      setBlackTime(prev => {
+        if (activeTurnRef.current === 'b' && prev !== undefined && prev > 0 && !lobby.endReason && !lobby.winner) {
+          return Math.max(0, prev - 1000);
+        }
+        return prev;
+      });
+    }, 1000);
+  };
+
   function getPlayerHtml(side: "top" | "bottom") {
     const blackHtml = (
       <div className="flex w-full flex-col justify-center">
@@ -380,6 +435,7 @@ export default function GamePage({ initialLobby }: { initialLobby: Game }) {
             <span className="badge badge-xs badge-error">disconnected</span>
           )}
         </span>
+        <span className="text-sm font-mono">{formatTime(blackTime)}</span>
       </div>
     );
     const whiteHtml = (
@@ -401,6 +457,7 @@ export default function GamePage({ initialLobby }: { initialLobby: Game }) {
             <span className="badge badge-xs badge-error">disconnected</span>
           )}
         </span>
+        <span className="text-sm font-mono">{formatTime(whiteTime)}</span>
       </div>
     );
 
@@ -658,13 +715,17 @@ export default function GamePage({ initialLobby }: { initialLobby: Game }) {
             <div className="bg-neutral absolute w-full rounded-t-lg bg-opacity-95 p-2">
               {lobby.endReason ? (
                 <div>
-                  {lobby.endReason === "abandoned"
-                    ? lobby.winner === "draw"
-                      ? `The game ended in a draw due to abandonment.`
-                      : `The game was won by ${lobby.winner} due to abandonment.`
-                    : lobby.winner === "draw"
-                      ? "The game ended in a draw."
-                      : `The game was won by checkmate (${lobby.winner}).`}{" "}
+                  {lobby.endReason === "abandoned" ? (
+                        lobby.winner === "draw"
+                            ? `The game ended in a draw due to abandonment.`
+                            : `The game was won by ${lobby.winner} due to abandonment.`
+                    ) : lobby.endReason === "timeout" ? (
+                        `The game was won by ${lobby.winner} on time.`
+                    ) : lobby.winner === "draw" ? (
+                        "The game ended in a draw."
+                    ) : (
+                        `The game was won by checkmate (${lobby.winner}).`
+                    )}{" "}
                   <br />
                   You can review the archived game at{" "}
                   <a

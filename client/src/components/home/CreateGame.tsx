@@ -7,6 +7,10 @@ import { useContext, useState } from "react";
 import { SessionContext } from "@/context/session";
 import { createGame } from "@/lib/game";
 
+const TIME_CONTROLS = [
+  "1|0", "1|1", "2|1", "3|0", "3|2", "5|0", "10|0", "15|10", "30|0"
+];
+
 export default function CreateGame() {
   const session = useContext(SessionContext);
   const [buttonLoading, setButtonLoading] = useState(false);
@@ -21,8 +25,9 @@ export default function CreateGame() {
     const unlisted = target.elements.namedItem("createUnlisted") as HTMLInputElement;
     const startingSide = (target.elements.namedItem("createStartingSide") as HTMLSelectElement)
       .value;
+    const timeControl = (target.elements.namedItem("timeControl") as HTMLSelectElement).value;
 
-    const game = await createGame(startingSide, unlisted.checked);
+    const game = await createGame(startingSide, unlisted.checked, timeControl);
 
     if (game) {
       router.push(`/${game.code}`);
@@ -42,26 +47,26 @@ export default function CreateGame() {
         <span className="label-text">Select your side</span>
       </label>
       <div className="input-group">
-        <select
-          className="select select-bordered"
-          name="createStartingSide"
-          id="createStartingSide"
-        >
+        <select className="select select-bordered" name="createStartingSide" id="createStartingSide">
           <option value="random">Random</option>
           <option value="white">White</option>
           <option value="black">Black</option>
         </select>
-        <button
-          className={
-            "btn" +
-            (buttonLoading ? " loading" : "") +
-            (!session?.user?.id ? " btn-disabled text-base-content" : "")
-          }
-          type="submit"
-        >
-          Create
-        </button>
       </div>
+      <label className="label mt-2" htmlFor="timeControl">
+        <span className="label-text">Time control (minutes | increment seconds)</span>
+      </label>
+      <select className="select select-bordered" name="timeControl" id="timeControl">
+        {TIME_CONTROLS.map(tc => (
+          <option key={tc} value={tc}>{tc}</option>
+        ))}
+      </select>
+      <button
+        className={"btn mt-4" + (buttonLoading ? " loading" : "") + (!session?.user?.id ? " btn-disabled" : "")}
+        type="submit"
+      >
+        Create
+      </button>
     </form>
   );
 }

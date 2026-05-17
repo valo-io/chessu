@@ -2,3 +2,7 @@ packages:
   - "client"
   - "server"
   - "types"
+allowBuilds:
+  argon2: true
+  bufferutil: true
+  utf-8-validate: true

@@ -4,7 +4,7 @@ export interface Game {
     white?: User;
     black?: User;
     winner?: "white" | "black" | "draw";
-    endReason?: "draw" | "checkmate" | "stalemate" | "repetition" | "insufficient" | "abandoned";
+    endReason?: "draw" | "checkmate" | "stalemate" | "repetition" | "insufficient" | "abandoned" | "timeout";
     host?: User;
     code?: string;
     unlisted?: boolean;
@@ -12,6 +12,11 @@ export interface Game {
     observers?: User[];
     startedAt?: number;
     endedAt?: number;
+    timeControl?: string;        // e.g. "1|0"
+    whiteTime?: number;          // milliseconds remaining
+    blackTime?: number;          // milliseconds remaining
+    lastTickTime?: number;       // for server-side interval
+    timerInterval?: NodeJS.Timeout;
 }
 
 export interface User {

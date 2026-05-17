@@ -7,6 +7,108 @@ import { io } from "../server.js";
 
 // TODO: clean up
 
+// Helper: stop active timer for a game
+function stopActiveTimer(game: Game) {
+    if (game.timerInterval) {
+        clearInterval(game.timerInterval);
+        game.timerInterval = undefined;
+    }
+}
+
+// Helper: start timer for the player whose turn it is
+function startActiveTimer(game: Game) {
+    if (game.endReason || game.winner) return;
+    if (!game.white || !game.black) return;
+
+    const chess = new Chess();
+    if (game.pgn) chess.loadPgn(game.pgn);
+    if (chess.isGameOver()) return;
+
+    const currentTurn = chess.turn();
+    const activeTime = currentTurn === 'w' ? game.whiteTime : game.blackTime;
+    if (activeTime === undefined || activeTime <= 0) {
+        // Time already expired – game over
+        const winner = currentTurn === 'w' ? 'black' : 'white';
+        game.endReason = "timeout";
+        game.winner = winner;
+        (async () => {
+            const saved = await GameModel.save(game);
+            if (saved) game.id = saved.id;
+            io.to(game.code as string).emit("gameOver", {
+                reason: "timeout",
+                winnerName: winner === 'white' ? game.white?.name : game.black?.name,
+                winnerSide: winner,
+                id: game.id
+            });
+            const index = activeGames.indexOf(game);
+            if (index !== -1) activeGames.splice(index, 1);
+        })();
+        return;
+    }
+
+    stopActiveTimer(game);
+
+    let lastTick = Date.now();
+    game.lastTickTime = lastTick;
+
+    const tickDuration = 100;
+    game.timerInterval = setInterval(() => {
+        if (game.endReason || game.winner) {
+            stopActiveTimer(game);
+            return;
+        }
+        if (!game.white || !game.black) return;
+
+        const now = Date.now();
+        const elapsed = Math.min(now - lastTick, tickDuration); // cap at tickDuration. should be always equal to tickDuration except the first run
+        lastTick = now;
+
+        const chessNow = new Chess();
+        if (game.pgn) chessNow.loadPgn(game.pgn);
+        const turn = chessNow.turn();
+        if (turn !== currentTurn) {
+            // Turn changed, stop this interval (new one will be started by sendMove)
+            stopActiveTimer(game);
+            return;
+        }
+
+        let currentTime = turn === 'w' ? game.whiteTime : game.blackTime;
+        if (currentTime === undefined) return;
+
+        currentTime -= elapsed;
+        if (turn === 'w') game.whiteTime = currentTime;
+        else game.blackTime = currentTime;
+
+        if (currentTime <= 0) {
+            // Timeout
+            const winner = turn === 'w' ? 'black' : 'white';
+            game.endReason = "timeout";
+            game.winner = winner;
+            stopActiveTimer(game);
+            (async () => {
+                const saved = await GameModel.save(game);
+                if (saved) game.id = saved.id;
+                io.to(game.code as string).emit("gameOver", {
+                    reason: "timeout",
+                    winnerName: winner === 'white' ? game.white?.name : game.black?.name,
+                    winnerSide: winner,
+                    id: game.id
+                });
+                const index = activeGames.indexOf(game);
+                if (index !== -1) activeGames.splice(index, 1);
+            })();
+        }
+    }, tickDuration);
+}
+
+// Emit current times to all clients in the room
+function emitTimerUpdate(game: Game) {
+    io.to(game.code as string).emit("timerUpdate", {
+        whiteTime: game.whiteTime,
+        blackTime: game.blackTime
+    });
+}
+
 export async function joinLobby(this: Socket, gameCode: string) {
     const game = activeGames.find((g) => g.code === gameCode);
     if (!game) return;
@@ -128,6 +230,7 @@ export async function claimAbandoned(this: Socket, type: "win" | "draw") {
         return;
     }
 
+    stopActiveTimer(game);
     game.endReason = "abandoned";
 
     if (type === "draw") {
@@ -178,11 +281,31 @@ export async function sendMove(this: Socket, m: { from: string; to: string; prom
             throw new Error("not turn to move");
         }
 
+        // Check if player has time left
+        const currentTime = prevTurn === 'w' ? game.whiteTime : game.blackTime;
+        if (currentTime !== undefined && currentTime <= 0) {
+            throw new Error("out of time");
+        }
+
         const newMove = chess.move(m);
 
         if (newMove) {
+            // Stop active timer before modifying times
+            stopActiveTimer(game);
+            // Add increment to the mover's remaining time
+            const incSeconds = game.timeControl ? parseInt(game.timeControl.split('|')[1]) : 0;
+            const incMs = incSeconds * 1000;
+            if (prevTurn === 'w' && game.whiteTime !== undefined) {
+                game.whiteTime += incMs;
+            } else if (prevTurn === 'b' && game.blackTime !== undefined) {
+                game.blackTime += incMs;
+            }
+
             game.pgn = chess.pgn();
+            
             this.to(game.code as string).emit("receivedMove", m);
+            emitTimerUpdate(game);
+            
             if (chess.isGameOver()) {
                 let reason: Game["endReason"];
                 if (chess.isCheckmate()) reason = "checkmate";
@@ -212,6 +335,9 @@ export async function sendMove(this: Socket, m: { from: string; to: string; prom
 
                 if (game.timeout) clearTimeout(game.timeout);
                 activeGames.splice(activeGames.indexOf(game), 1);
+            } else {
+                // Start timer for the new turn
+                startActiveTimer(game);
             }
         } else {
             throw new Error("invalid move");
@@ -253,6 +379,12 @@ export async function joinAsPlayer(this: Socket) {
             side: "black"
         });
         game.startedAt = Date.now();
+        
+        // If game already has moves (i.e., started) and both players present, start timer
+        // This can happen if white moved before black joined. the timer starts after black joins.
+        if (game.pgn && game.white && game.black && !game.endReason && !game.winner) {
+            startActiveTimer(game);
+        }
     } else {
         console.log("joinAsPlayer: attempted to join a game with already 2 players");
     }

@@ -19,9 +19,12 @@ const app = express();
 const server = createServer(app);
 
 // database
+console.log("Connecting to DB...");
 await db.connect();
+console.log("Connected to DB. Init tables...");
 db.query(INIT_TABLES, (err) => {
     if (err) {
+        console.error("Tables NOT initialized, error:");
         console.error(err);
     } else {
         console.log("Tables initialized");

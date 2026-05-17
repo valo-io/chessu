@@ -78,11 +78,17 @@ export const createGame = async (req: Request, res: Response) => {
             connected: false
         };
         const unlisted: boolean = req.body.unlisted ?? false;
+        const timeControl: string = req.body.timeControl || "10|0";
+        const [minutes, _incSeconds] = timeControl.split('|').map(Number);
+        const initialTimeMs = minutes * 60 * 1000;
         const game: Game = {
             code: nanoid(6),
             unlisted,
             host: user,
-            pgn: ""
+            pgn: "",
+            timeControl,
+            whiteTime: initialTimeMs,
+            blackTime: initialTimeMs
         };
         if (req.body.side === "white") {
             game.white = user;
